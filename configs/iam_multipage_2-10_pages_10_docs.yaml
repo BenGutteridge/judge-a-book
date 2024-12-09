@@ -1,0 +1,13 @@
+gpt_model: gpt-4o
+gpt_cache_path: gpt_cache_iam.db
+
+seed: 0
+
+dataset_dir: "IAM Handwriting DB"
+
+split: 1.0
+
+ocr_engines:
+  - azure
+
+batch_api: False

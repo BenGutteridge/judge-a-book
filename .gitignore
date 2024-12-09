@@ -1,0 +1,17 @@
+data/
+results/
+plots/
+scratch/
+
+notebooks/scratch/
+notebooks/*playground.py
+
+.env
+htr-icl-googlevision-key.json
+
+__pycache__/
+.vscode/
+
+*.egg-info
+
+build/
