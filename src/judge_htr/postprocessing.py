@@ -161,9 +161,9 @@ def generate_colored_latex_table(
     # Helper function to create a custom colormap with white at zero
     def create_custom_colormap(cmap_name_positive, cmap_name_negative):
         colors = {
-            "red": plt.cm.get_cmap(cmap_name_negative)(0.5),
+            "red": plt.get_cmap(cmap_name_negative)(0.5),
             "white": (1, 1, 1, 1),  # Pure white
-            "green": plt.cm.get_cmap(cmap_name_positive)(0.5),
+            "green": plt.get_cmap(cmap_name_positive)(0.5),
         }
         return LinearSegmentedColormap.from_list(
             "custom_colormap", [colors["red"], colors["white"], colors["green"]]

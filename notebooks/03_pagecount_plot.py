@@ -16,7 +16,7 @@ from judge_htr.postprocessing import (
 import anls_star
 from diskcache import Cache
 import matplotlib.pyplot as plt
-from matplotlib.cm import get_cmap
+from matplotlib.pyplot import get_cmap
 import os
 
 os.environ["PATH"] += ":/Library/TeX/texbin"  # for latex in figures

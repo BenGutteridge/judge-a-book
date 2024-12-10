@@ -34,4 +34,4 @@ Experimental results can be reproduced with the notebooks below as follows:
 
 **N.B.** though we use a seed, OpenAI API calls are [not strictly reproductible](https://platform.openai.com/docs/advanced-usage#reproducible-outputs), so slight differences in output are possible.
 
-To avoid the cost incurred by running all experiments from scratch, the cache files for these experiments can be downloaded [here](CACHE FILES TBC) and placed inside `/data`
+To avoid the cost incurred by running all experiments from scratch, the cache file for these experiments can be downloaded [here](https://judgeocr.s3.eu-north-1.amazonaws.com/cache.zip?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA2YZUYKVGDYVXVAWB%2F20241210%2Feu-north-1%2Fs3%2Faws4_request&X-Amz-Date=20241210T213827Z&X-Amz-Expires=604800&X-Amz-SignedHeaders=host&X-Amz-Signature=33bbcda2ac7d7e7e9a4c9a4da524380a5a98e0c25b8c6c1f3e71c0c53e978c81), unzipped and placed inside `/data` with the name `gpt_cache_iam.db`. (N.B. the file is ~24GB.)

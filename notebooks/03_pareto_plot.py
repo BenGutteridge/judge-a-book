@@ -19,7 +19,7 @@ import anls_star
 from diskcache import Cache
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
-from matplotlib.cm import get_cmap
+from matplotlib.pyplot import get_cmap
 import os
 import pyperclip
 
