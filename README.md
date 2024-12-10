@@ -30,7 +30,7 @@ Experimental results can be reproduced with the notebooks below as follows:
   - By including `batch_api: True` in the config file for `01_experiments`, API calls are written to a batch submission file  in `data/batch_api`. 
   - With this notebook, batch calls can be submitted to the API, the outputs can be downloaded, and then written to the GPT cache file. Then you should be able to re-run `01_experiments` and the cached outputs will load. Make sure to run one cell at a time and only follow the instructions accompanying each cell
 - `notebooks/02_error_catching.py`: catches simple LLM errors and updates outputs accordingly, as described in ther 'Error catching' sub-section of the paper.
-- `03_{performance_tables, dropfirst_table, pagecount_plot, pareto_plot}.py`: uses output files from notebooks `01`/`02` to produce Tables 1,2 and Figures 1,2 in the paper
+- `03_{performance_tables, dropfirst_table, pagecount_plot, pareto_plot}.py`: uses output files from notebooks `01`/`02` to produce Tables 1,2 and two figures in the paper
 
 **N.B.** though we use a seed, OpenAI API calls are [not strictly reproductible](https://platform.openai.com/docs/advanced-usage#reproducible-outputs), so slight differences in output are possible.
 
