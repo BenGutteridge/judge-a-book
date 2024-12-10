@@ -4,49 +4,42 @@
 from prompts import newpage
 from judge_htr import results, data, plots
 import pandas as pd
-from judge_htr.postprocessing import gpt_output_postprocessing
 from evaluate import load
 from loguru import logger
 from tqdm import tqdm
+from judge_htr.postprocessing import (
+    gpt_output_postprocessing,
+    get_mode_elements,
+    get_mode_str,
+    ocr_strs_short,
+)
 import anls_star
 from diskcache import Cache
+import matplotlib.pyplot as plt
 from matplotlib.cm import get_cmap
 import os
 
 os.environ["PATH"] += ":/Library/TeX/texbin"  # for latex in figures
 from matplotlib import pyplot as plt
 
+
 tqdm.pandas()
 cache = Cache(data)
 cer = load("cer")
 plt.rcParams["text.usetex"] = True
 
-ocr_engines = [
-    "azure",
-    "google_ocr",
-    "textract",
-]
+tqdm.pandas()
 
 # %% [markdown]
-# ### Parameters
+# ### Parameters and setup
 drop_first_page = False
 remove_whitespace = False
-
-if remove_whitespace:
-    str_proc = lambda s: gpt_output_postprocessing(s).replace(" ", "")
-else:
-    str_proc = gpt_output_postprocessing
-
-
 seed = 0
 
 # IAM (2 pages)
 split = 1.0
 results_file = f"iam_multipage_2-10_pages_10_docs_split={split:.02f}_seed={seed:02d}"
-run_name = "IAM varying document length"
 results_path = results / f"{results_file}_checked.pkl"
-
-
 df = pd.read_pickle(results_path)
 
 # Metric
@@ -58,60 +51,37 @@ score = {
     "ANLS": lambda gt, pred: anls_star.anls_score(gt=gt, pred=pred),
 }[metric]
 
-all_modes = [col.replace("_cost", "") for col in df.columns if col.endswith("_cost")]
+# Param-dependent string manipulation utils
+if remove_whitespace:
+    str_proc = lambda s: gpt_output_postprocessing(s).replace(" ", "")
+else:
+    str_proc = gpt_output_postprocessing
+
+# Concatenates list of page texts into single string with page breaks if a list, and removes first page if needed
+page_join = lambda x: str_proc(
+    newpage.join(x[drop_first_page:])
+    if isinstance(x, list)
+    else newpage.join(x.split(str_proc(newpage))[drop_first_page:])
+)
 
 # %% [markdown]
-# Split up mode into OCR engine, method, and GPT model
+# ### Split up mode into OCR engine, method, and GPT model
 
-df["num_pages"] = df["gt"].apply(len)
-
+all_modes = [col.replace("_cost", "") for col in df.columns if col.endswith("_cost")]
 mode_tuples = {}
 for mode in all_modes:
-    if mode in ocr_engines:
-        ocr_engine, method, gpt_model = mode, None, None
-    elif "->" in mode:
-        method, gpt_model = mode.split("->")
-        if set(method.split("+")) == set(ocr_engines):
-            ocr_engine = None
-        elif "+" in method:
-            ocr_engine, method = method.split("+")
-            assert ocr_engine in ocr_engines
-        else:
-            ocr_engine = method
-            method = None
-    elif "gpt-4o-vision" in mode:
-        ocr_engine, method, gpt_model = (
-            None,
-            mode.replace("gpt-4o-vision", "all_images"),
-            "gpt-4o",
-        )
-    else:
-        logger.warning(f"Skipped {mode}")
-        continue
+    ocr_engine, method, gpt_model = get_mode_elements(mode)
     mode_tuples[mode] = (ocr_engine, method, gpt_model)
 
 
-def get_mode_str(ocr_engine, method, gpt_model):
-    out = f"{ocr_engine}+{method}->{gpt_model}"
-    out = out.replace("None+", "").replace("+None", "").replace("->None", "")
-    return out
-
-
 # %% [markdown]
-# Rearranging df to generate plot
-
-cols_to_keep = [
-    col
-    for col in ["writer_id", "id1", "id2", "id3", "id3_list", "gt", "num_pages"]
-    if col in df.columns
-]
-
+# ### Converting columns for each mode into rows
 
 dfs_to_combine = []
 for mode, (ocr_engine, method, gpt_model) in mode_tuples.items():
     df_ = df.copy()
     cols = df_.columns
-    df_ = df_[cols_to_keep + [mode, f"{mode}_cost"]]
+    df_ = df_[["writer_id", "gt", mode, f"{mode}_cost"]]
     df_["ocr_engine"] = ocr_engine
     df_["method"] = method
     df_["gpt_model"] = gpt_model
@@ -120,23 +90,15 @@ for mode, (ocr_engine, method, gpt_model) in mode_tuples.items():
     dfs_to_combine.append(df_)
 df = pd.concat(dfs_to_combine).reset_index(names="doc_id")
 
-# Join pages, dropping the first page if necessary
-page_join = lambda x: str_proc(
-    newpage.join(x[drop_first_page:])
-    if isinstance(x, list)
-    else newpage.join(x.split(str_proc(newpage))[drop_first_page:])
-)
-
 # Convert lists of strings to strings
+df["num_pages"] = df["gt"].apply(len)
 df["pred"] = df["pred"].apply(page_join)
 df["gt"] = df["gt"].apply(page_join)
 
-
-# %% [markdown]
-# Get scores
-
 df = df.fillna("None")
 
+# %% [markdown]
+# ### Apply metric and aggregate scores and costs over modes and page counts
 to_cat = []
 for n in range(2, 11):
     df_agg_score = (
@@ -163,20 +125,7 @@ identifying_columns = df_agg_score[
 ]
 df = pd.concat([identifying_columns, df], axis=1)
 
-# %% [markdown]
-# Drop unnecessary columns and final reshaping
-
-df = df[
-    ~df["mode_name"].apply(
-        lambda s: (
-            s in ocr_engines
-            or "mini" in s
-            or "+page->" in s
-            or sum([ocr in s for ocr in ocr_engines]) > 1
-        )
-    )
-]
-
+# Final reshaping
 cer_columns = [col for col in df.columns if col.startswith("CER_improvement_")]
 df_long = df.melt(
     id_vars=["mode_name", "ocr_engine", "method", "gpt_model", "num_pages"],
@@ -188,15 +137,12 @@ df_long = df.melt(
 # %% [markdown]
 # Generate and save plot
 
-# Initialize the plot
 plt.figure(figsize=(4, 3))
-
-# Get unique mode_names
 mode_names = df_long["mode_name"].unique()
 
+# Custom styling
 num_blues = 6
 blues = [get_cmap("Blues", num_blues)(i) for i in range(num_blues)]
-
 mode_names_style = {
     "azure->gpt-4o": {
         "name": r"\textsc{ocr only}",
@@ -230,17 +176,13 @@ mode_names_style = {
     },
 }
 
-# Plot each mode_name separately with custom styling
-for mode in sorted(mode_names, key=lambda s: mode_names_style[s]["order"]):
+# Plot
+for mode in sorted(mode_names_style.keys(), key=lambda s: mode_names_style[s]["order"]):
     subset = df_long[df_long["mode_name"] == mode]
-
-    # Extract ocr_engine, method, gpt_model for this mode
-    # Assuming that these are consistent within each mode_name
     ocr_engine = subset["ocr_engine"].iloc[0]
     method = subset["method"].iloc[0]
     gpt_model = subset["gpt_model"].iloc[0]
 
-    # Plot the line
     plt.plot(
         subset["page_count"].apply(lambda s: int(s.split("_")[-1])),
         subset["CER_improvement"],
@@ -248,11 +190,10 @@ for mode in sorted(mode_names, key=lambda s: mode_names_style[s]["order"]):
         **mode_names_style[mode]["linestyle"],
     )
 
-# Customize the plot
 plt.xlabel("Page Count")
 plt.ylabel("Relative CER improvement")
 plt.legend(loc="lower left")
-plt.xticks(range(2, 11))  # Assuming page counts from 2 to 10
+plt.xticks(range(2, 11))
 plt.axhline(0, color="gray", alpha=0.5, linestyle=":")
 plt.tight_layout()
 

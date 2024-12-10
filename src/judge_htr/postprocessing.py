@@ -5,8 +5,9 @@ for the 01_experiments.py and succeeding notebooks.
 
 import re
 import pandas as pd
-from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.colors import LinearSegmentedColormap, TwoSlopeNorm
 import matplotlib.pyplot as plt
+from typing import Optional
 
 # OCR names for display
 ocr_strs = {
@@ -16,19 +17,29 @@ ocr_strs = {
     "textract": "Amazon Textract",
     "None": "No OCR",
 }
+ocr_strs_short = {
+    "tesseract": "Tesseract",
+    "google_ocr": "Google",
+    "azure": "Azure",
+    "textract": "Textract",
+    "None": "None/All",
+}
+ocr_engines = list(ocr_strs.keys())
 
 # Strategies for display
 method_strs = {
     "None": "\\textsc{ocr only}",
     "all_pages": "\\textsc{+all pages}",
-    "gpt-4o-mini-chosen_page": "\\textsc{+chosen page}",
-    "page": "\\textsc{+first page}",
-    "per_page": "\\textsc{ocr pbp}",
-    "all_images": "\\textsc{vision*}",
-    "all_images-per_page": "\\textsc{vision* pbp}",
-    "google_ocr+azure+textract": "\\textsc{all ocr pbp}",
-    "page_pbp": "\\textsc{+all pages pbp}",
+    "chosen_page": "\\textsc{+chosen page}",
+    "first_page": "\\textsc{+first page}",
+    "pbp": "\\textsc{ocr only pbp}",
+    "vision*": "\\textsc{vision*}",
+    "vision*_pbp": "\\textsc{vision* pbp}",
+    "google_ocr_azure_textract_pbp": "\\textsc{all ocr pbp}",
+    "all_pages_pbp": "\\textsc{+all pages pbp}",
 }
+
+gpt_model_strs = lambda s: f"\\textsc{{{s}}}"
 
 
 def gpt_output_postprocessing(s: str) -> str:
@@ -93,6 +104,32 @@ def drop_duplicate_columns(df: pd.DataFrame) -> pd.DataFrame:
     # Select columns by their positional indices to handle duplicate names correctly
     df_unique = df.iloc[:, cols_to_keep].copy()
     return df_unique
+
+
+def get_mode_elements(mode: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Get OCR engine, method, and GPT model from mode string."""
+    if mode in ocr_engines:
+        ocr_engine, method, gpt_model = mode, "None", "None"
+    elif "->" in mode:
+        method, gpt_model = mode.split("->")
+        if "+" in method:
+            ocr_engine, method = method.split("+")
+            assert ocr_engine in ocr_engines
+        elif method in ocr_engines:
+            ocr_engine, method = method, "None"
+        else:
+            ocr_engine, method = "None", method
+    else:
+        raise ValueError(f"Invalid mode: {mode}")
+
+    return ocr_engine, method, gpt_model
+
+
+def get_mode_str(ocr_engine: str, method: str, gpt_model: str) -> str:
+    """Generate a string representation of the mode."""
+    out = f"{ocr_engine}+{method}->{gpt_model}"
+    out = out.replace("None+", "").replace("+None", "").replace("->None", "")
+    return out
 
 
 def generate_colored_latex_table(
@@ -194,7 +231,7 @@ def generate_colored_latex_table(
         # If method_strs is not defined, skip or handle accordingly
         pass
 
-    df["gpt_model"] = df["gpt_model"].apply(lambda s: "\textsc{" + s + "}")
+    df["gpt_model"] = df["gpt_model"].apply(gpt_model_strs)
 
     # Generate the LaTeX table without the header
     latex_table = df[

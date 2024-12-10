@@ -284,7 +284,7 @@ for min_page_count in range(2, 11):
 seed = 0
 dfs = []
 for page_count in range(2, 11):
-    df_filepath = data_dir / f"iam_multipage_minpages={min_page_count:02d}.pkl"
+    df_filepath = data_dir / f"iam_multipage_minpages={page_count:02d}.pkl"
     df = pd.read_pickle(df_filepath)
     # Filter to only docs with precisely `page_count` pages
     df = df[df["gt"].apply(len) == page_count]

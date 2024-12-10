@@ -10,6 +10,10 @@ from tqdm import tqdm
 from judge_htr.postprocessing import (
     method_strs,
     gpt_output_postprocessing,
+    get_mode_elements,
+    get_mode_str,
+    ocr_strs_short,
+    gpt_model_strs,
 )
 import anls_star
 from diskcache import Cache
@@ -17,11 +21,10 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.cm import get_cmap
 import os
+import pyperclip
 
 os.environ["PATH"] += ":/Library/TeX/texbin"  # for latex in figures
 from matplotlib import pyplot as plt
-
-import numpy as np
 
 
 tqdm.pandas()
@@ -31,31 +34,16 @@ plt.rcParams["text.usetex"] = True
 
 tqdm.pandas()
 
-ocr_engines = [
-    "azure",
-    "google_ocr",
-    "textract",
-]
-
 # %% [markdown]
-# ### Parameters
+# ### Parameters and setup
 drop_first_page = False
 remove_whitespace = False
-
-if remove_whitespace:
-    str_proc = lambda s: gpt_output_postprocessing(s).replace(" ", "")
-else:
-    str_proc = gpt_output_postprocessing
-
-
 seed = 0
 
 # IAM (2 pages)
 split = 0.5
 results_file = f"iam_multipage_minpages=02_split={split:.02f}_seed={seed:02d}"
-run_name = "IAM multi-page"
 results_path = results / f"{results_file}_checked.pkl"
-
 df = pd.read_pickle(results_path)
 
 # Metric
@@ -67,60 +55,37 @@ score = {
     "ANLS": lambda gt, pred: anls_star.anls_score(gt=gt, pred=pred),
 }[metric]
 
-all_modes = [col.replace("_cost", "") for col in df.columns if col.endswith("_cost")]
+# Param-dependent string manipulation utils
+if remove_whitespace:
+    str_proc = lambda s: gpt_output_postprocessing(s).replace(" ", "")
+else:
+    str_proc = gpt_output_postprocessing
+
+# Concatenates list of page texts into single string with page breaks if a list, and removes first page if needed
+page_join = lambda x: str_proc(
+    newpage.join(x[drop_first_page:])
+    if isinstance(x, list)
+    else newpage.join(x.split(str_proc(newpage))[drop_first_page:])
+)
 
 # %% [markdown]
-# Split up mode into OCR engine, method, and GPT model
+# ### Split up mode into OCR engine, method, and GPT model
 
-df["num_pages"] = df["gt"].apply(len)
-
+all_modes = [col.replace("_cost", "") for col in df.columns if col.endswith("_cost")]
 mode_tuples = {}
 for mode in all_modes:
-    if mode in ocr_engines:
-        ocr_engine, method, gpt_model = mode, None, None
-    elif "->" in mode:
-        method, gpt_model = mode.split("->")
-        if set(method.split("+")) == set(ocr_engines):
-            ocr_engine = None
-        elif "+" in method:
-            ocr_engine, method = method.split("+")
-            assert ocr_engine in ocr_engines
-        else:
-            ocr_engine = method
-            method = None
-    elif "gpt-4o-vision" in mode:
-        ocr_engine, method, gpt_model = (
-            None,
-            mode.replace("gpt-4o-vision", "all_images"),
-            "gpt-4o",
-        )
-    else:
-        logger.warning(f"Skipped {mode}")
-        continue
+    ocr_engine, method, gpt_model = get_mode_elements(mode)
     mode_tuples[mode] = (ocr_engine, method, gpt_model)
 
 
-def get_mode_str(ocr_engine, method, gpt_model):
-    out = f"{ocr_engine}+{method}->{gpt_model}"
-    out = out.replace("None+", "").replace("+None", "").replace("->None", "")
-    return out
-
-
 # %% [markdown]
-# Reshaping df to generate figure
-
-cols_to_keep = [
-    col
-    for col in ["writer_id", "id1", "id2", "id3", "id3_list", "gt", "num_pages"]
-    if col in df.columns
-]
-
+# ### Converting columns for each mode into rows
 
 dfs_to_combine = []
 for mode, (ocr_engine, method, gpt_model) in mode_tuples.items():
     df_ = df.copy()
     cols = df_.columns
-    df_ = df_[cols_to_keep + [mode, f"{mode}_cost"]]
+    df_ = df_[["writer_id", "gt", mode, f"{mode}_cost"]]
     df_["ocr_engine"] = ocr_engine
     df_["method"] = method
     df_["gpt_model"] = gpt_model
@@ -129,22 +94,14 @@ for mode, (ocr_engine, method, gpt_model) in mode_tuples.items():
     dfs_to_combine.append(df_)
 df = pd.concat(dfs_to_combine).reset_index(names="doc_id")
 
-# Join pages, dropping the first page if necessary
-page_join = lambda x: str_proc(
-    newpage.join(x[drop_first_page:])
-    if isinstance(x, list)
-    else newpage.join(x.split(str_proc(newpage))[drop_first_page:])
-)
-
 # Convert lists of strings to strings
 df["pred"] = df["pred"].apply(page_join)
 df["gt"] = df["gt"].apply(page_join)
 
+df = df.fillna("None")
 
 # %% [markdown]
-# Generate figure
-
-df = df.fillna("None")
+# ### Apply metric and aggregate scores and costs over modes
 
 df_agg_score = (
     df.groupby(["mode_name", "ocr_engine", "method", "gpt_model"])
@@ -156,11 +113,28 @@ df_agg_cost = df.groupby(["mode_name", "ocr_engine", "method", "gpt_model"]).agg
 )
 df_agg = pd.concat([df_agg_score, df_agg_cost], axis=1).reset_index()
 
-ocr_strs = {
-    "azure": "Azure",
-    "google_ocr": "Google",
-    "textract": "Textract",
-    "None": "All/None",
+# Sort by CER and cost
+df_agg = df_agg.sort_values(by=["CER", "cost"], ascending=[True, True])
+
+
+# %% [markdown]
+# ## Generate scatter plot figure with Pareto frontier
+
+# %% [markdown]
+# ### Define scatter plot styling function
+
+marker_mapping = {
+    "azure": "s",  # Square
+    "google_ocr": "^",  # Triangle
+    "textract": "X",  # Cross
+    "None": "o",  # Circle
+}
+
+# Mappings for GPT models (sizes)
+size_mapping = {
+    "None": 40,
+    "gpt-4o-mini": 70,
+    "gpt-4o": 100,
 }
 
 # Mappings for methods (colors)
@@ -170,59 +144,30 @@ greys = ["#BFBFBF", "#4F4F4F"]
 color_mapping = {
     # ocr -> gpt with increasing complexity
     "None": blues[0],
-    "per_page": blues[1],
-    "page": blues[2],
-    "gpt-4o-mini-chosen_page": blues[3],
+    "pbp": blues[1],
+    "first_page": blues[2],
+    "chosen_page": blues[3],
     "all_pages": blues[4],
-    "page_pbp": blues[5],
+    "all_pages_pbp": blues[5],
     # image only with increasing complexity
-    "all_images": greys[0],
-    "all_images-per_page": greys[1],
+    "vision*": greys[0],
+    "vision*_pbp": greys[1],
     # other
-    "google_ocr+azure+textract": "green",
+    "google_ocr_azure_textract_pbp": "green",
 }
 
 
-# Define arbitrary styling function
 def get_marker_style(gpt_model, method, ocr_engine):
-    """
-    Determines marker style, color, and size based on gpt_model, method, and ocr_engine.
-
-    Parameters:
-        gpt_model (str): GPT model used.
-        method (str): Method used.
-        ocr_engine (str): OCR engine used.
-
-    Returns:
-        dict: A dictionary containing 'color', 'marker', and 'size' for styling.
-    """
-    # Mappings for OCR engines (markers)
-    marker_mapping = {
-        "azure": "s",  # Square
-        "google_ocr": "^",  # Triangle
-        "textract": "X",  # Cross
-        "None": "o",  # Circle
-    }
-
-    # Mappings for GPT models (sizes)
-    size_mapping = {
-        "None": 40,
-        "gpt-4o-mini": 70,
-        "gpt-4o": 100,
-    }
-
-    # Get styles
-    color = color_mapping.get(method, "black")
-    marker = marker_mapping.get(ocr_engine, "x")
-    size = size_mapping.get(gpt_model, 40)
-
+    """Return dict of scatter marker elements based on method stages."""
+    color = color_mapping[method]
+    marker = marker_mapping[ocr_engine]
+    size = size_mapping[gpt_model]
     return {"color": color, "marker": marker, "size": size}
 
 
-# Step 1: Sort by CER and cost
-df_agg = df_agg.sort_values(by=["CER", "cost"], ascending=[True, True])
+# %% [markdown]
+# ### Get subset of points that sit on the Pareto frontier
 
-# Step 2: Identify Pareto frontier points
 pareto_points = []
 current_min_cost = float("inf")
 
@@ -231,11 +176,14 @@ for _, row in df_agg.iterrows():
         pareto_points.append(row)
         current_min_cost = row["cost"]
 
-# Convert Pareto points to a DataFrame
 pareto_df = pd.DataFrame(pareto_points)
 
-# Step 3: Plot all points with styling based on gpt_model, method, and ocr_engine
-plt.figure(figsize=(5, 5))
+
+# %% [markdown]
+# ### Plot scatter plot of methods with Pareto frontier
+plt.figure(figsize=(4.5, 3.5))
+
+# Plot all points with styling based on gpt_model, method, and ocr_engine
 for _, row in df_agg.iterrows():
     style = get_marker_style(row["gpt_model"], row["method"], row["ocr_engine"])
     plt.scatter(
@@ -247,7 +195,7 @@ for _, row in df_agg.iterrows():
         alpha=0.9,
     )
 
-# Step 4: Plot the Pareto frontier
+# Frontier line
 plt.plot(
     pareto_df["CER"],
     pareto_df["cost"],
@@ -256,30 +204,24 @@ plt.plot(
     alpha=0.7,
 )
 
-# Step 5: Add text for Pareto frontier points
-txt_box = []
+# Get string for Pareto frontier methods
+txt_box = "\\textbf{Pareto frontier methods} ($L \\rightarrow R$):"
 for _, row in pareto_df.iterrows():
-    ocr_engine, method, gpt_model = row["ocr_engine"], row["method"], row["gpt_model"]
-    mode_name_text = (
-        f"{ocr_strs[ocr_engine] if ocr_engine != 'None' else ''} {method_strs[method]}"
-        + (f" $\\rightarrow$ {gpt_model}" if gpt_model != "None" else "")
+    ocr_engine = (
+        ocr_strs_short[row["ocr_engine"]] if row["ocr_engine"] != "None" else ""
     )
-    txt_box.append(mode_name_text)
+    method = method_strs[row["method"]]
+    gpt_model = (
+        (" $\\rightarrow$ " + gpt_model_strs(row["gpt_model"]))
+        if row["gpt_model"] != "None"
+        else ""
+    )
+    txt_box += f"\n{ocr_engine} {method} {gpt_model}"
 
-    # Add a multi-line text box
-    text = "\\textbf{Pareto frontier methods} ($L \\rightarrow R$):\n" + "\n".join(
-        txt_box
-    )
-
-    plt.text(
-        (0.007 + 0.075) / 2 + 0.015,
-        4.5,
-        text,
-        # fontsize=12,
-        ha="right",  # Center the text horizontally
-        va="bottom",  # Align the bottom of the text with the y-coordinate
-        bbox=dict(facecolor="lightgrey", edgecolor="black", boxstyle="round,pad=0.5"),
-    )
+logger.info(
+    f"\n\The following text listing Pareto frontier methods has been copied to clipboard:\n{txt_box}"
+)
+pyperclip.copy(txt_box)
 
 # Create legend handles for OCR engines (markers)
 ocr_engine_legend = [
@@ -290,14 +232,9 @@ ocr_engine_legend = [
         marker=marker,
         linestyle="None",
         markersize=10,
-        label=ocr_strs[engine],
+        label=ocr_strs_short[engine],
     )
-    for engine, marker in {
-        "azure": "s",
-        "google_ocr": "^",
-        "textract": "X",
-        "None": "o",
-    }.items()
+    for engine, marker in marker_mapping.items()
 ]
 
 # Create legend handles for methods (colors)
@@ -320,40 +257,38 @@ gpt_model_legend = [
         label=model,
     )
     for model, size in {
-        "None": 30,
-        "gpt-4o-mini": 70,
-        "gpt-4o": 110,
+        "None": 40,
+        gpt_model_strs("gpt-4o-mini").replace("gpt-", ""): 70,
+        gpt_model_strs("gpt-4o").replace("gpt-", ""): 110,
     }.items()
 ]
 
 # Add legends to the plot
-plt.legend(
+ocr_engine_legend = plt.legend(
     handles=ocr_engine_legend,
     title="OCR Engine",
     loc="upper right",
     bbox_to_anchor=(1, 1),
 )
-plt.gca().add_artist(
-    plt.legend(
-        handles=ocr_engine_legend,
-        title="OCR Engine",
-        loc="upper center",
-        bbox_to_anchor=(0.475, 1),
-    )
+
+method_legend = plt.legend(
+    handles=method_legend,
+    title="Method",
+    loc="lower center",
+    bbox_to_anchor=(0.5, 1),
+    ncol=3,
 )
-plt.gca().add_artist(
-    plt.legend(
-        handles=method_legend, title="Method", loc="upper right", bbox_to_anchor=(1, 1)
-    )
+
+gpt_model_legend = plt.legend(
+    handles=gpt_model_legend,
+    title="GPT Model",
+    loc="upper center",
+    bbox_to_anchor=(0.5, 1),
 )
-plt.gca().add_artist(
-    plt.legend(
-        handles=gpt_model_legend,
-        title="GPT Model",
-        loc="lower right",
-        bbox_to_anchor=(1, 0),
-    )
-)
+
+plt.gca().add_artist(ocr_engine_legend)
+plt.gca().add_artist(method_legend)
+plt.gca().add_artist(gpt_model_legend)
 
 # Add labels and grid
 plt.xlabel("CER")
@@ -364,7 +299,12 @@ plt.xlim(0.007, 0.075)
 plt.tight_layout()
 
 # Save to pdf, cropped
-plt.savefig(plots / f"{results_path.stem}_pareto.pdf", bbox_inches="tight")
+plt.savefig(
+    plots / f"{results_path.stem}_pareto.pdf",
+    bbox_extra_artists=(ocr_engine_legend, method_legend, gpt_model_legend),
+    bbox_inches="tight",
+)
+plt.tight_layout()
 plt.show()
 
 # %%
