@@ -1,6 +1,6 @@
 # 👩‍⚖️ Judge a Book by its Cover 📕
 
-Code for reproducing experiments in the paper "Judge a Book by its Cover: Investigating Multi-modal LLMs for Multi-page Handwritten Document Transcription", submitted to the [DocUI@AAAI25 workshop](https://sites.google.com/view/docui-aaai25).
+Code for reproducing experiments in the paper "Judge a Book by its Cover: Investigating Multi-Modal LLMs for Multi-Page Handwritten Document Transcription", submitted to the [DocUI@AAAI25 workshop](https://sites.google.com/view/docui-aaai25).
 
 ### Installation
 For Unix:
@@ -9,7 +9,7 @@ conda create --name judge python=3.10
 conda activate judge
 pip install -r requirements.txt
 pip install -e .
-mkdir data plots results data
+mkdir data plots results
 ```
 
 You will also have to set up the AWS CLI and API keys for OpenAI and OCR engines if you haven't done so already (see `.example.env` for an example `.env` file).
